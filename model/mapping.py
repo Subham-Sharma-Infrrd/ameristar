@@ -1,6 +1,22 @@
+"""
+Web_scrapping object definitions
+"""
+from enum import Enum
+
+
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, TypedDict
-from model import camelcase
+
+
+
+class WebScrappingDocType(Enum):
+    CAD = "CAD"
+    TAX = "TAX"
+
+class WebScrappingWebPageTypes(Enum):
+    HOMEPAGE = "HOMEPAGE"
+    SEARCH_RESULT_TABLE_PAGE = "SEARCH_RESULT_TABLE_PAGE"
+    SEARCH_RESULT_PAGE = "SEARCH_RESULT_PAGE"
+
 
 
 @dataclass
@@ -9,9 +25,9 @@ class MappingRequest:
     city: str
     state : str
     county : str
-    ownerName : str
-    jobId : int
-    orderId : int
+    owner_name : str
+    job_id : int
+    order_id : int
 
     def to_json(self):
         return dict(requestId=self.requestId, status=self.status, documents=self.documents)
@@ -21,8 +37,9 @@ class MappingRequest:
 class MappingResponse:
     cad : str
     tax: str
-    jobId : int
-    orderId : int
+    job_id : int
+    order_id : int
 
     def to_json(self):
-        return dict(cad=self.cad, tax=self.tax, jobId=self.jobId, orderId=self.orderId)
+        return dict(requestId=self.requestId, status=self.status, documents=self.documents)
+

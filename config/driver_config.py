@@ -1,0 +1,2 @@
+HEADLESS = False
+IMPLICIT_WAIT = 35
