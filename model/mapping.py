@@ -9,9 +9,9 @@ class MappingRequest:
     city: str
     state : str
     county : str
-    owner_name : str
-    job_id : int
-    order_id : int
+    ownerName : str
+    jobId : int
+    orderId : int
 
     def to_json(self):
         return dict(requestId=self.requestId, status=self.status, documents=self.documents)
@@ -21,8 +21,8 @@ class MappingRequest:
 class MappingResponse:
     cad : str
     tax: str
-    job_id : int
-    order_id : int
+    jobId : int
+    orderId : int
 
     def to_json(self):
-        return dict(requestId=self.requestId, status=self.status, documents=self.documents)
+        return dict(cad=self.cad, tax=self.tax, jobId=self.jobId, orderId=self.orderId)

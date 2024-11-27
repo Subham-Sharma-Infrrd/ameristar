@@ -23,21 +23,36 @@ class MapResource(Resource):
             city = data.get('city')
             state = data.get('state')
             county = data.get('county')
-            owner_name = data.get('owner_name')
-            job_id = data.get('job_id')
-            order_id = data.get('order_id')
+            owner_name = data.get('ownerName')
+            job_id = data.get('jobId')
+            order_id = data.get('orderId')
 
-            print(f"Received Data: {data}")
+            logger.info(f"Received Data: {data}")
+
+            missing_fields = []
+            if not owner_name:
+                missing_fields.append("ownerName")
+            if not job_id:
+                missing_fields.append("jobId")
+            if not order_id:
+                missing_fields.append("orderId")
+
+            if missing_fields:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Missing required fields: {', '.join(missing_fields)}"
+                }), 400
 
             response = MappingResponse(
                 cad="Some CAD Data",
                 tax="Some Tax Data",
-                job_id=job_id,
-                order_id=order_id
+                jobId=job_id,
+                orderId=order_id
             )
-
-            return jsonify(response.to_json()), 200
-
+            
+            return jsonify(response.to_json())
+        
         except Exception as e:
-            return jsonify({"status": "error", "message": str(e)}), 400
+            logger.error(f"An error occurred: {str(e)}")
+            return jsonify({"status": "error", "message": str(e)})
 
