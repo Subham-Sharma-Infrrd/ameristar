@@ -14,6 +14,7 @@ from urllib.parse import urljoin
 
 @dataclass(frozen=True)
 class LogConfig:
+    LOG_LEVEL = "DEBUG"
     LOGGER_NAME: str = "ameristar-logger"
     LOG_FORMAT: str = "[%(asctime)s] [%(levelname)s] [%(threadName)s] [%(filename)s] [%(funcName)s:%(lineno)s] [%(id_)s]: %(message)s"
     LOG_MAX_BYTES: str = 10**6

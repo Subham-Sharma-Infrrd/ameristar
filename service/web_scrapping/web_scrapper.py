@@ -7,13 +7,26 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.print_page_options import PrintOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    StaleElementReferenceException,
+)
 
 # Import configurations
-from webpage_configs.state_county_config import STATE_COUNTY_CONFIG
-from webpage_configs.driver_config import HEADLESS, IMPLICIT_WAIT
+from config.state_county_config import STATE_COUNTY_CONFIG
+from config.driver_config import HEADLESS, IMPLICIT_WAIT
 from constants import HTML_DIR, PDF_DIR
 from log import logger
+from model.mapping import WebScrappingDocType, WebScrappingWebPageTypes
+from service.web_scrapping.utils import (
+    detect_cad_homepage_page,
+    detect_property_results_page,
+    get_unique_id_for_tax_doc,
+    handle_captcha_first_time,
+    handle_recaptcha_and_click_button,
+    simulate_human_like_behavior_to_solve_captcha,
+)
+
 
 class WebScraper:
     def __init__(self):
@@ -31,7 +44,7 @@ class WebScraper:
         options = webdriver.ChromeOptions()
         if HEADLESS:
             options.add_argument("--headless=new")
-        
+
         return webdriver.Chrome(options=options)
 
     def create_directories(self):
@@ -41,120 +54,193 @@ class WebScraper:
         os.makedirs(HTML_DIR, exist_ok=True)
         os.makedirs(PDF_DIR, exist_ok=True)
 
-    def detect_page_type(self, xpaths):
+    def detect_page_type(self, web_page_config):
         """
-        Detect whether the current page is a search page or a search results page.
+        Detect the type of the current webpage based on validation parameters.
+
+        Args:
+            page_config (dict): A dictionary containing webpage types and their validation parameters.
+
         Returns:
-            "search_page" if the current page is a search page,
-            "results_page" if the current page is a search results page,
-            None if neither can be determined.
+            str: The detected page type (e.g., "HOMEPAGE", "SEARCH_RESULT_TABLE_PAGE").
+            None: If no page type can be determined.
         """
         try:
-            # Check for a unique element on the search page
-            if self.driver.find_elements(By.XPATH, xpaths["address_search_button"]):
-                logger.info("Search page detected.")
-                return "search_page"
+            for page_type, config in web_page_config["xpaths"].items():
+                validation_params = config.get("VALIDATION_PARAMS", {})
 
-            # Check for a unique element on the search results page
-            if self.driver.find_elements(By.XPATH, xpaths["search_result_table"]):
-                logger.info("Search results page detected.")
-                return "results_page"
+                # Check if all validation elements are present on the current page
+                all_elements_present = all(
+                    self.driver.find_elements(By.XPATH, xpath)
+                    for xpath in validation_params.values()
+                )
+
+                if all_elements_present:
+                    print(f"{page_type} detected.")
+                    return page_type
+
+                if (
+                    not all_elements_present
+                    and page_type == WebScrappingWebPageTypes.HOMEPAGE.value
+                ):
+                    if detect_cad_homepage_page(self.driver, web_page_config):
+                        print(f"{page_type} detected.")
+                        return page_type
+
+                if (
+                    not all_elements_present
+                    and page_type
+                    == WebScrappingWebPageTypes.SEARCH_RESULT_TABLE_PAGE.value
+                ):
+                    if detect_property_results_page(self.driver, config):
+                        print(f"{page_type} detected.")
+                        return page_type
+
         except Exception as e:
             logger.error(f"Error detecting page type: {e}")
 
-        logger.info("Unable to determine the current page.")
+        print("Unable to determine the current page.")
         return None
 
     def navigate_to_website(self, state, county):
         """
         Navigate to the website based on the state and county.
         """
-        state_info = STATE_COUNTY_CONFIG.get(state.lower(), STATE_COUNTY_CONFIG.get(state.upper()))
+        state_info = STATE_COUNTY_CONFIG.get(state.upper())
         if not state_info:
             raise ValueError(f"No configuration found for state: {state}")
-        
-        county_info = state_info.get(county.lower(), state_info.get(county.upper()))
+
+        county_info = state_info.get(county.upper())
         if not county_info:
-            raise ValueError(f"No configuration found for county: {county} in state: {state}")
-        
-        self.driver.get(county_info["website"])
-        return county_info["xpaths"]
-    
-    def navigate_to_website_tax(self, url):
-      # Open the URL
-      self.driver.get(url)
+            raise ValueError(
+                f"No configuration found for county: {county} in state: {state}"
+            )
 
-      # Maximize the browser window (optional)
-      self.driver.maximize_window()
+        cad_county_info = county_info.get(WebScrappingDocType.CAD.value)
+        if not cad_county_info:
+            raise ValueError(
+                f"No configuration found for county: {county} in state: {state}"
+            )
 
-      return self.driver
-    
-    def find_tax_element(self, xpath):
-        return self.driver.find_element(By.XPATH, xpath)
+        self.driver.get(cad_county_info["website"])
+        return cad_county_info
 
-    def get_raw_text(self):
-      return self.driver.get
-
-    def perform_search(self, xpaths, street_number, street_name, owner_name):
+    def perform_search(self, xpaths_configs, street_number, street_name, owner_name):
         """
         Perform a search and navigate to the relevant result.
         """
         try:
-            for attempt in range(3):  # Retry up to 3 times
-                page_type = self.detect_page_type(xpaths)
-
-                if page_type == "search_page":
-                    logger.info("Filling out the search form.")
+            for attempt in range(5):  # Retry up to 3 times
+                page_type = self.detect_page_type(xpaths_configs)
+                xpaths = xpaths_configs.get("xpaths", {}).get(page_type)
+                if xpaths_configs['is_captcha_present']:
+                    simulate_human_like_behavior_to_solve_captcha(self.driver)
+                if page_type == WebScrappingWebPageTypes.HOMEPAGE.value:
+                    print("Filling out the search form.")
+                    if xpaths_configs['is_captcha_present']:
+                        handle_captcha_first_time(self.driver)
                     # Click the address search button
-                    self.wait.until(EC.presence_of_element_located((By.XPATH, xpaths["address_search_button"]))).click()
-
+                    self.wait.until(
+                        EC.presence_of_element_located(
+                            (By.XPATH, xpaths["address_search_button"])
+                        )
+                    ).click()
+                    print("clicked on address search button")
+                    time.sleep(10)
                     # Fill in search inputs
-                    self.wait.until(EC.presence_of_element_located((By.XPATH, xpaths["street_number"]))).send_keys(street_number)
-                    self.wait.until(EC.presence_of_element_located((By.XPATH, xpaths["street_name"]))).send_keys(street_name)
+                    self.wait.until(
+                        EC.presence_of_element_located(
+                            (By.XPATH, xpaths["street_number"])
+                        )
+                    ).send_keys(street_number)
 
-                    # Click the search button
-                    self.wait.until(EC.element_to_be_clickable((By.XPATH, xpaths["search_button"]))).click()
+                    print("updated on street number")
+                    time.sleep(10)
+                    self.wait.until(
+                        EC.presence_of_element_located(
+                            (By.XPATH, xpaths["street_name"])
+                        )
+                    ).send_keys(street_name)
+                    time.sleep(10)
 
-                elif page_type == "results_page":
-                    logger.info("Checking search results.")
+                    print("Updated Street Name")
+                    if xpaths_configs['is_captcha_present'] and handle_recaptcha_and_click_button(self.driver, xpaths["search_button"]):
+                        print("Operation completed successfully.")
+                    elif not xpaths_configs['is_captcha_present']:
+                        # Click the search button
+                        self.wait.until(
+                            EC.element_to_be_clickable((By.XPATH, xpaths["search_button"]))
+                        ).click()
+                        time.sleep(10)
+                    else:
+                        print("Operation failed.")
+                    time.sleep(10)
+                    print("CLicked on Search Button")
+                    continue
+
+                elif (
+                    page_type == WebScrappingWebPageTypes.SEARCH_RESULT_TABLE_PAGE.value
+                ):
+                    print("Checking search results.")
                     # Get search result rows
-                    rows = self.driver.find_elements(By.XPATH, xpaths["search_result_table"])
+                    rows = self.driver.find_elements(
+                        By.XPATH, xpaths.get("search_result_table")
+                    )
                     num_rows = len(rows)
-                    logger.info(f"Number of rows found: {num_rows}")
+                    print(f"Number of rows found: {num_rows}")
 
                     if num_rows == 0:
-                        logger.info("No rows found. Refreshing the page.")
+                        print("No rows found. Refreshing the page.")
                         self.driver.refresh()
-                        time.sleep(3)
+                        time.sleep(10)
                         continue
 
                     # Loop through each row to find the owner name
                     for row in rows:
                         try:
                             row_text = row.text.strip()
-                            logger.info(f"Row text: {row_text}")
+                            print(f"Row text: {row_text}")
 
-                            if owner_name.lower() in row_text.lower():  # Check if owner name matches
-                                logger.info(f"Owner name '{owner_name}' found in row.")
+                            if (
+                                owner_name.lower() in row_text.lower()
+                            ):  # Check if owner name matches
+                                print(f"Owner name '{owner_name}' found in row.")
+                                search_page_stage_url = self.driver.current_url
                                 row.click()  # Click the matching row
-                                return  # Exit after successful click
+                                try:
+                                    # Wait for the URL to change
+                                    WebDriverWait(self.driver, 30).until(
+                                        EC.url_changes(search_page_stage_url)
+                                    )
+                                    print("URL has changed. New page loaded.")
+                                except Exception as e:
+                                    print(f"Error waiting for URL change: {e}")
+                                    # Optional fallback to wait for a specific element
 
                         except StaleElementReferenceException:
-                            logger.exception("Stale element reference detected. Re-locating rows.")
-                            rows = self.driver.find_elements(By.XPATH, xpaths["search_result_table"])
+                            logger.exception(
+                                "Stale element reference detected. Re-locating rows."
+                            )
+                            rows = self.driver.find_elements(
+                                By.XPATH, xpaths["search_result_table"]
+                            )
                             continue
+                elif page_type == WebScrappingWebPageTypes.SEARCH_RESULT_PAGE.value:
+                    account_number = get_unique_id_for_tax_doc(self.driver, xpaths)
+                    return True
 
                 else:
-                    logger.info("Unable to determine the page type. Refreshing.")
+                    print("Unable to determine the page type. Refreshing.")
                     self.driver.refresh()
-                    time.sleep(3)
+                    time.sleep(10)
 
-            logger.info(f"Owner name '{owner_name}' not found after {attempt + 1} attempts.")
+            print(f"Owner name '{owner_name}' not found after {attempt + 1} attempts.")
 
         except NoSuchElementException as e:
             logger.exception(f"Element not found during search: {e}")
         except Exception as e:
             logger.exception(f"An error occurred: {e}")
+            return False
 
     def download_or_screenshot(self, xpaths):
         """
@@ -163,19 +249,27 @@ class WebScraper:
         """
         timestamp = int(time.time())
         try:
-            # Try downloading the PDF
-            # Wait until the element is visible
-            element = WebDriverWait(self.driver, 60).until(
-                EC.visibility_of_element_located((By.XPATH, "//a[@onclick=\"onPrintClick('printSummaryView')\"]"))
-            )
-            element.click()
-            logger.info("Clicked on the element.")
-        except Exception as e:
-            # logger.info("Download button not found. Saving screenshot.")
+            #     # Try downloading the PDF
+            #     # Wait until the element is visible
+            #     print_element = WebDriverWait(self.driver, 60).until(
+            #         EC.visibility_of_element_located(
+            #             (By.XPATH, xpaths.get(WebScrappingWebPageTypes.SEARCH_RESULT_PAGE.value).get("PRINT_BUTTON"))
+            #         )
+            #     )
+            #     print_element.click()
+            #     print_summary_element = WebDriverWait(self.driver, 60).until(
+            #         EC.visibility_of_element_located(
+            #             (By.XPATH, xpaths.get(WebScrappingWebPageTypes.SEARCH_RESULT_PAGE.value).get("PRINT_SUMMARY_VIEW"))
+            #         )
+            #     )
+            #     print_summary_element.click()
+            #     print("Clicked on the element.")
+            # except Exception as e:
+            print("Download button not found. Saving screenshot.")
             # screenshot_path = os.path.join(HTML_DIR, f"{timestamp}.jpg")
             # self.driver.save_screenshot(screenshot_path)
-            # logger.info(f"Screenshot saved to: {screenshot_path}")
-            
+            # print(f"Screenshot saved to: {screenshot_path}")
+
             # Save the page as a PDF in the PDF directory
             pdf_path = os.path.join(PDF_DIR, f"{timestamp}.pdf")
             print_options = PrintOptions()
@@ -185,32 +279,12 @@ class WebScraper:
             pdf_bytes = base64.b64decode(pdf)
             with open(pdf_path, "wb") as fh:
                 fh.write(pdf_bytes)
-            logger.exception(f"HTML content saved as PDF to: {pdf_path}")
+            print(f"HTML content saved as PDF to: {pdf_path}")
         except Exception as e:
-            logger.error(e)
+            logger.exception(e)
 
     def close(self):
         """
         Close the browser and clean up resources.
         """
         self.driver.quit()
-
-
-# Example usage:
-if __name__ == "__main__":
-    scraper = WebScraper()
-    
-    try:
-        state = "TX"
-        county = "COLLIN"
-        street_number = "9900"
-        street_name = "PRESTON VINEYARD"
-        owner_name = "JOHNSON GENE &"
-        
-        # Workflow
-        xpaths = scraper.navigate_to_website(state, county)
-        scraper.perform_search(xpaths, street_number, street_name, owner_name)
-        scraper.download_or_screenshot(xpaths)
-    
-    finally:
-        scraper.close()

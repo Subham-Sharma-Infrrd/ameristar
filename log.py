@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 
 from flask import has_request_context, request
 
-from config import LogConfig
+from config.logs import LogConfig
 
 log_config = LogConfig()
 
