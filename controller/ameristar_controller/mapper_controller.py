@@ -41,7 +41,7 @@ class MapResource(Resource):
                 return jsonify({
                     "status": "error",
                     "message": f"Missing required fields: {', '.join(missing_fields)}"
-                }), 400
+                })
 
             response = MappingResponse(
                 cad="Some CAD Data",
