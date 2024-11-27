@@ -1,0 +1,4 @@
+BASE_DIR = "data/raw"
+HTML_DIR = f"{BASE_DIR}/html"
+PDF_DIR = f"{BASE_DIR}/pdf"
+APP_NAME = "AMERISTAR_WEB_SCRAPPER"
