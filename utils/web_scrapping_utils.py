@@ -1,8 +1,13 @@
 # Detect if the page contains the relevant table headers
 
 import random
+import re
 import time
 
+from selenium import webdriver
+from webdriver_manager.chrome import ChromeDriverManager
+
+from config.driver_config import HEADLESS
 from log import logger
 from model.mapping import WebScrappingWebPageTypes
 from service.web_scrapping.constants import EXPECTED_HEADERS
@@ -11,6 +16,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium_stealth import stealth
+from selenium.webdriver.chrome.service import Service
 
 
 
@@ -88,25 +95,25 @@ def handle_captcha_first_time(driver, recaptcha_iframe_xpath="//iframe[contains(
             EC.presence_of_element_located((By.XPATH, recaptcha_iframe_xpath))
         )
         if recaptcha_iframe:
-            print("reCAPTCHA iframe detected.")
+            logger.info("reCAPTCHA iframe detected.")
             
             # Switch to the reCAPTCHA iframe
             driver.switch_to.frame(recaptcha_iframe)
-            print("Switched to reCAPTCHA iframe.")
+            logger.info("Switched to reCAPTCHA iframe.")
             
             # Wait for the reCAPTCHA to complete or solve it manually if required
             WebDriverWait(driver, 30).until(
                 EC.invisibility_of_element((By.XPATH, "//iframe[contains(@title, 'reCAPTCHA')]"))
             )
-            print("reCAPTCHA completed or is no longer blocking.")
+            logger.info("reCAPTCHA completed or is no longer blocking.")
             
             # Switch back to the main content
             driver.switch_to.default_content()
-            print("Switched back to main content. handle_captcha_first_time")
+            logger.info("Switched back to main content. handle_captcha_first_time")
 
             return True
     except Exception as e:
-        print(f"Error handling reCAPTCHA: {e}")
+        logger.info(f"Error handling reCAPTCHA: {e}")
         return False
 
 
@@ -125,7 +132,7 @@ def handle_recaptcha_and_click_button(driver, button_xpath, recaptcha_iframe_xpa
     try:
         # Call the CAPTCHA handler first
         if not handle_captcha_first_time(driver, recaptcha_iframe_xpath):
-            print("CAPTCHA handling failed.")
+            logger.info("CAPTCHA handling failed.")
             return False
         
         # Wait for the button to become clickable
@@ -137,15 +144,12 @@ def handle_recaptcha_and_click_button(driver, button_xpath, recaptcha_iframe_xpa
         actions = ActionChains(driver)
         actions.move_to_element(search_button).perform()  # Bring the button into view
         search_button.click()  # Click the button
-        print("Button clicked successfully.")
+        logger.info("Button clicked successfully.")
         return True
     
     except Exception as e:
-        print(f"Error handling reCAPTCHA or clicking the button {e}")
+        logger.info(f"Error handling reCAPTCHA or clicking the button {e}")
         return False
-
-
-
 
 def human_like_mouse_movements(driver, element):
     """
@@ -186,13 +190,13 @@ def simulate_human_like_behavior_to_solve_captcha(driver, recaptcha_iframe_xpath
             EC.presence_of_element_located((By.XPATH, recaptcha_iframe_xpath))
         )
         driver.switch_to.frame(recaptcha_iframe)
-        print("Switched to reCAPTCHA iframe.")
+        logger.info("Switched to reCAPTCHA iframe.")
 
         # Locate the checkbox
         captcha_checkbox = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.CLASS_NAME, "recaptcha-checkbox"))
         )
-        print("Located reCAPTCHA checkbox.")
+        logger.info("Located reCAPTCHA checkbox.")
 
         # Simulate human-like mouse movement to the checkbox
         human_like_mouse_movements(driver, captcha_checkbox)
@@ -202,30 +206,45 @@ def simulate_human_like_behavior_to_solve_captcha(driver, recaptcha_iframe_xpath
 
         # Click the checkbox
         captcha_checkbox.click()
-        print("Clicked on the reCAPTCHA checkbox.")
+        logger.info("Clicked on the reCAPTCHA checkbox.")
 
         # Wait for CAPTCHA resolution or invisibility
         time.sleep(random.uniform(5, 10))  # Simulate delay in CAPTCHA processing
         WebDriverWait(driver, 60).until(
             EC.invisibility_of_element((By.XPATH, recaptcha_iframe_xpath))
         )
-        print("CAPTCHA resolved or is no longer blocking.")
+        logger.info("CAPTCHA resolved or is no longer blocking.")
 
         driver.switch_to.default_content()
         return True
 
     except Exception as e:
-        print(f"Error solving CAPTCHA: {e}")
+        logger.info(f"Error solving CAPTCHA: {e}")
         driver.switch_to.default_content()
         return False
 
-def get_unique_id_for_tax_doc(driver, config) -> bool:
+def get_unique_id_for_tax_doc(driver, config, timeout=10) -> bool:
     """
     This function is to pick account_id from cad to tax document
     """
-    element_path = config["xpaths"]["account_number_xpath"]
-    unique_id_for_tax = get_element_value(driver, element_xpath=config["xpaths"]["unique_id_for_tax"])
     # TODO: Need to check if the unique_id_for_tax is present in the tax document
+
+    try:
+        # Wait for the `Property ID` element and extract its sibling `td` text
+        property_id_td = WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.XPATH, config['custom_xpaths']['ACCOUNT_NUMBER_PATH']))
+        )
+        account_number = property_id_td.text
+        match = re.search(r"Geographic\s*ID:\s*([A-Z\d.\-]+)", account_number)
+        if match:
+            geographic_id = match.group(1)  # Extract the matched group
+            return geographic_id
+        logger.info(f"Account Number: {account_number}")
+        return account_number
+
+    except Exception as e:
+        logger.info(f"An error occurred while extracting the account number: {e}")
+        return None
 
 
 def get_element_value(driver, element_xpath, attribute=None):
@@ -251,5 +270,155 @@ def get_element_value(driver, element_xpath, attribute=None):
         else:
             return element.text
     except Exception as e:
-        print(f"Error fetching value for element with XPath '{element_xpath}': {e}")
+        logger.info(f"Error fetching value for element with XPath '{element_xpath}': {e}")
         return None
+
+
+def get_url_for_tax_docs(state, county, tax_web_page_config):
+    """
+    Generates the base URL for tax documents based on the provided state and county.
+
+    Args:
+        state (str): The state name.
+        county (str): The county name.
+        tax_web_page_config (dict): A dictionary containing URL templates for tax documents.
+
+    Returns:
+        str: The base URL for the tax documents.
+    """
+    try:
+        # Normalize state and county to lower case for lookup
+        state = state.lower().strip()
+        # county = county.lower().strip()
+
+        # Find the URL template in the configuration
+        base_url = tax_web_page_config.get("website")
+        if base_url is None:
+            raise ValueError("Base URL template not found in the configuration.")
+        
+        logger.info(f"Base URL for {state.title()}, {county.title()}: {base_url}")
+        return base_url
+        
+    except Exception as e:
+        logger.info(f"Error generating base URL: {e}")
+        return None
+
+
+def update_tax_url_with_tax_number(base_url, account_number):
+    """
+    Updates the base tax URL with the provided account number.
+
+    Args:
+        base_url (str): The base URL for tax documents.
+        account_number (str): The account or property ID.
+
+    Returns:
+        str: The complete URL with the account number included.
+    """
+    try:
+        if '{}' not in base_url:
+            raise ValueError("The URL does not contain a '{}' placeholder.")
+
+        # Replace the placeholder with the account number
+        updated_url = base_url.format(account_number)
+        logger.info(f"Updated URL: {updated_url}")
+        return updated_url
+
+    except Exception as e:
+        logger.info(f"Error updating tax URL: {e}")
+        return None
+
+def initialize_stealth_driver():
+    """
+    Initializes a stealth-enabled Selenium WebDriver with specified configurations.
+
+    Returns:
+        WebDriver: A configured instance of Selenium WebDriver.
+    """
+    options = webdriver.ChromeOptions()
+    if HEADLESS:
+        options.add_argument("--headless=new")  # Use new headless mode
+
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('--disable-popup-blocking')
+    options.add_argument('--start-maximized')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+
+    # Rotate user agents
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
+        # Add more user agents as needed
+    ]
+    user_agent = random.choice(user_agents)
+    options.add_argument(f'user-agent={user_agent}')
+
+    # Set up ChromeDriver with Service
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+
+    # Set `navigator.webdriver` to undefined
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+    # Set user agent via CDP
+    driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": user_agent})
+
+    # Enable stealth mode
+    stealth(
+        driver,
+        languages=["en-US", "en"],
+        vendor="Google Inc.",
+        platform="Win32",
+        webgl_vendor="Intel Inc.",
+        renderer="Intel Iris OpenGL Engine",
+        fix_hairline=True,
+    )
+
+    return driver
+
+
+def update_account_number_format(state: str, county: str, text: str)-> str:
+    """
+    This function is to update the account number format based on the state and county
+    """
+    if state.upper() in ["TX"]:
+        if county.upper() in ["JOHNSON"]:
+            return text.replace(".", "-")
+        elif county.upper() in ["HIDALGO"]:
+            return text.replace("-", "")
+        # elif county in ["JOHNSON"]:
+        #     return text.replace("-", "")
+        # elif county in ["WISE"]:
+        #     return text.replace("-", "") 
+    return text
+
+def reveal_complete_document(driver):
+    """
+    Clicks on the 'View More' element to reveal the complete document.
+
+    Args:
+        driver (webdriver): The Selenium WebDriver instance.
+    """
+    try:
+        # Wait for the 'View More' element to be clickable
+        view_more_element = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, "account-view-more-collapse-down"))
+        )
+
+        # Scroll to the element to ensure visibility (optional)
+        driver.execute_script("arguments[0].scrollIntoView(true);", view_more_element)
+
+        # Click the 'View More' button
+        view_more_element.click()
+
+        # Allow some time for the content to load
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.XPATH, "//*"))  # Wait for DOM update
+        )
+
+        print("Clicked 'View More' and revealed additional content.")
+    except Exception as e:
+        print(f"Error while clicking 'View More': {e}")
