@@ -7,10 +7,13 @@ STATE_COUNTY_CONFIG = {
             "CAD": {
                 "website": "https://esearch.dentoncad.com/",
                 "xpaths": BASTROP_UI,
+                "custom_xpaths": {
+                    "ACCOUNT_NUMBER_PATH": """//th[text()='Property ID:']/following-sibling::td"""
+                },
                 "is_captcha_present": False,
             },
             "TAX": {
-                "website": "https://esearch.fbcad.org/",
+                "website": """https://taxweb.dentoncounty.gov/Accounts/AccountDetails?taxAccountNumber={}DEN""",
                 "xpaths": {},
             },
         },
@@ -18,36 +21,50 @@ STATE_COUNTY_CONFIG = {
             "CAD": {
                 "website": "https://esearch.hidalgoad.org/",
                 "xpaths": BASTROP_UI,
-                "is_captcha_present": True,
+                "custom_xpaths": {
+                    "ACCOUNT_NUMBER_PATH": """//td[strong[contains(text(), 'Geographic ID:')]]"""
+                },  # Custom xpaths for Hidalgo CAD
+                "is_captcha_present": False,
             },
             "TAX": {
-                "website": "https://esearch.collincad.org/",
-                "xpaths": {},
+                "website": """https://actweb.acttax.com/act_webdev/hidalgo/showdetail2.jsp?can={}""",
+                "xpaths": {
+                    "expand_tax_doc": """//a[text()='Expand All']""",
+                },
             },
         },
         "JOHNSON": {
             "CAD": {
                 "website": "https://esearch.johnsoncad.com/",
                 "xpaths": BASTROP_UI,
+                "custom_xpaths": {
+                    "ACCOUNT_NUMBER_PATH": """//td[strong[contains(text(), 'Geographic ID:')]]"""
+                },
                 "is_captcha_present": False,
             },
             "TAX": {
-                "website": "https://esearch.collincad.org/",
-                "xpaths": {},
+                "website": """https://www.johnsoncountytaxoffice.org/Accounts/AccountDetails?taxAccountNumber={}""",
+                "xpaths": {
+                    "expand_tax_doc": """//a[text()='Expand All']""",
+                },
             },
         },
         "WISE": {
             "CAD": {
                 "website": "https://esearch.wise-cad.com/",
                 "xpaths": BASTROP_UI,
-                "is_captcha_present": True,
+                "custom_xpaths": {
+                    "ACCOUNT_NUMBER_PATH": """//td[strong[contains(text(), 'Geographic ID:')]]"""
+                },
+                "is_captcha_present": False,
             },
             "TAX": {
-                "website": "https://esearch.collincad.org/",
-                "xpaths": {},
+                "website": """https://tax.co.wise.tx.us/Accounts/AccountDetails?taxAccountNumber={}""",
+                "xpaths": {
+                    "expand_tax_doc": """//a[text()='Expand All']""",
+                },
             },
         },
-    
     }
 }
 

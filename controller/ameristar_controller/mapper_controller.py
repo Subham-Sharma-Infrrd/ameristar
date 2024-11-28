@@ -3,10 +3,12 @@ from flask import request, json, jsonify
 from flask_restx import Api, Resource, Namespace
 from flask_accepts import accepts, responds
 import usaddress
-from model.mapping import MappingRequest, MappingResponse
+from model.mapping import MappingRequest, MappingResponse, WebScrappingDocType
 from model import get_schema
 from log import logger
+from utils.web_scrapping_utils import get_url_for_tax_docs, update_account_number_format, update_tax_url_with_tax_number
 from service.web_scrapping.web_scrapper import WebScraper
+from utils.common_utils import generate_unique_id, name_and_address_parser
 
 
 api = Namespace("ameristarwrapper")
@@ -18,14 +20,11 @@ class MapResource(Resource):
     @responds(schema=get_schema(MappingResponse), api=api, use_swagger=False)
     def post(self):
         try:
+            unique_id = generate_unique_id()
             mapping_request: MappingRequest = request.parsed_obj
             scraper = WebScraper()
             logger.info(f"Mapping request: {json.dumps(request.json)}")
             data = request.get_json()
-
-            adrress_dict = usaddress.parse(mapping_request.address)
-            if not adrress_dict.get("street"):
-
             logger.info(f"Received Data: {data}")
 
             missing_fields = []
@@ -41,31 +40,40 @@ class MapResource(Resource):
                     "status": "error",
                     "message": f"Missing required fields: {', '.join(missing_fields)}"
                 })
-            # TODO : Add logics to seprate street values
-            street_number = adrress_dict["AddressNumber"]
-            # TODO : Add logics to seprate street values
-            street_name = "" #" ".join([])
+            
+            cad_web_page_config = scraper.get_cad_configs(mapping_request.state, mapping_request.county)
+            account_number_status = scraper.perform_search(cad_web_page_config, mapping_request.street_number, mapping_request.street_address, mapping_request.owner_name)
+            if account_number_status:
+                # TODO: Add logic to download the Tax document and CAD document
+                # downloading CAD document
+                cad_pdf_path = scraper.download_or_screenshot(cad_web_page_config["xpaths"], doc_type=WebScrappingDocType.CAD.value)
+                tax_web_page_config = scraper.get_tax_configs(mapping_request.state, mapping_request.county)
 
-            web_page_config = scraper.navigate_to_website(mapping_request.state, mapping_request.county)
-            status = scraper.perform_search(web_page_config, street_number, street_name, mapping_request.owner_name)
-            if status:
-                scraper.download_or_screenshot(web_page_config["xpaths"])
-                print("SUCCESSFULLY_SCRAPPED")
+                base_url = get_url_for_tax_docs(mapping_request.state, mapping_request.county, tax_web_page_config)
+                updated_account_number_format = update_account_number_format(mapping_request.state, mapping_request.county, account_number_status)
+                complete_tax_url = update_tax_url_with_tax_number(base_url, updated_account_number_format)
+                # scraper.tax_page_expand_web_page(tax_web_page_config, link_to_page = complete_tax_url)
+                tax_pdf_path = scraper.download_or_screenshot(tax_web_page_config["xpaths"], link_to_page = complete_tax_url, doc_type=WebScrappingDocType.TAX.value)
+                # tax_pdf_path = scraper.download_or_screenshot(tax_web_page_config["xpaths"], doc_type=WebScrappingDocType.TAX.value)
+
+                logger.info("SUCCESSFULLY_SCRAPPED")
                 response = MappingResponse(
-                    cad="Some CAD Data",
-                    tax="Some Tax Data",
-                    jobId=mapping_request.job_id,
-                    orderId=mapping_request.order_id
+                    cad=cad_pdf_path,
+                    tax=tax_pdf_path,
+                    job_id=mapping_request.job_id,
+                    order_id=mapping_request.order_id,
+                    account_number=account_number_status,
+                    unique_id=unique_id
                 )
             else:
-                print("SCRAPPING_FAILED")
+                logger.info("SCRAPPING_FAILED")
                 response = {
                     "status": "error",
                     "message": "Scraping failed"
                 }
             
             
-            return jsonify(response.to_json())
+            return jsonify(response)
         
         except Exception as e:
             logger.error(f"An error occurred: {str(e)}")
