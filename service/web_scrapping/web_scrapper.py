@@ -1,6 +1,11 @@
 import os
 import time
 import base64
+import logging
+from PIL import Image
+from io import BytesIO
+from PyPDF2 import PdfMerger
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.print_page_options import PrintOptions
@@ -9,25 +14,22 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
     NoSuchElementException,
     StaleElementReferenceException,
+    ElementNotInteractableException,
+    WebDriverException
 )
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
+from service.web_scrapping.web_scrapper import *
 
 # Import configurations
-from config.state_county_config import STATE_COUNTY_CONFIG
+from config.state_county_config import *
 from config.driver_config import HEADLESS, IMPLICIT_WAIT
 from constants import HTML_DIR, PDF_DIR
 from log import logger
 from model.mapping import WebScrappingDocType, WebScrappingWebPageTypes, WebSurfMode
-from utils.web_scrapping_utils import (
-    detect_cad_homepage_page,
-    detect_property_results_page,
-    get_unique_id_for_tax_doc,
-    handle_captcha_first_time,
-    handle_recaptcha_and_click_button,
-    initialize_stealth_driver,
-    simulate_human_like_behavior_to_solve_captcha,
-)
+from utils.web_scrapping_utils import detect_cad_homepage_page, detect_property_results_page, get_unique_id_for_tax_doc, handle_captcha_first_time, handle_recaptcha_and_click_button, initialize_stealth_driver, simulate_human_like_behavior_to_solve_captcha
 from utils.common_utils import generate_unique_id
+from webdriver_manager.chrome import ChromeDriverManager
+from config.tax_word_configs import TAX_KEYWORDS
 
 
 class WebScraper:
@@ -39,6 +41,7 @@ class WebScraper:
         self.driver = self.setup_driver()
         self.wait = WebDriverWait(self.driver, IMPLICIT_WAIT)
         self.create_directories()
+
 
     def setup_driver(self):
         """
@@ -63,6 +66,7 @@ class WebScraper:
         """
         os.makedirs(HTML_DIR, exist_ok=True)
         os.makedirs(PDF_DIR, exist_ok=True)
+
 
     def detect_page_type(self, web_page_config):
         """
@@ -112,6 +116,7 @@ class WebScraper:
         logger.info("Unable to determine the current page.")
         return None
 
+
     def get_cad_configs(self, state, county):
         """
         Navigate to the website based on the state and county.
@@ -132,6 +137,7 @@ class WebScraper:
                 f"No configuration found for county: {county} in state: {state}"
             )
         return cad_county_info
+
 
     def get_tax_configs(self, state, county):
         """
@@ -154,7 +160,8 @@ class WebScraper:
             )
         return tax_county_info
 
-    def perform_search(self, xpaths_configs, street_number, street_name, owner_name):
+
+    def cad_perform_search(self, xpaths_configs, street_number, street_name, owner_name):
         """
         Perform a search and navigate to the relevant result.
         """
@@ -272,6 +279,7 @@ class WebScraper:
             logger.exception(f"An error occurred: {e}")
             return False
     
+
     def tax_page_expand_web_page(self, configs, link_to_page= None):
         """
         Clicks on the 'View More' element to reveal the complete document.
@@ -317,7 +325,8 @@ class WebScraper:
         except Exception as e:
             logger.info(f"Error while clicking 'View More': {e}")
 
-    def download_or_screenshot(self, xpaths, link_to_page= None, doc_type = None):
+
+    def download_or_screenshot(self, xpaths=None, link_to_page= None, doc_type = None):
         """
         Check for download options or save a screenshot if not available.
         Save the file in the appropriate directory.
@@ -363,6 +372,219 @@ class WebScraper:
         except Exception as e:
             logger.exception(e)
             return None
+
+
+    def navigate_to_website_tax(self, url):
+        ##### This will hit the URL and direct you over there.
+        try:
+            self.driver.get(url)
+            # Maximize the browser window (optional)
+            self.driver.maximize_window()
+        
+        except Exception as e:
+            logger.log(logging.log, f"Encountering error in opening the website: {e}")
+
+
+    def get_raw_text(self):
+        """
+        Parameters:
+            driver (webdriver): The Selenium WebDriver instance.
+        Returns:
+            str: The raw text of the webpage.
+        """
+        try:
+            # Get the text of the <body> tag
+            page_raw_text = self.driver.find_element(By.TAG_NAME, "body").text
+            return page_raw_text.strip()
+        except Exception as e:
+            # Return if you are ancountring any error in getting in the raw text.
+            print(f"An error occurred while getting raw text: {e}")
+            return ""
+
+
+    def tax_download_or_screenshot(self, doc_type):
+        """
+            This method will return the file_name after taking screenshots.
+        """
+        unique_id = generate_unique_id()
+        try:
+            pdf_path = os.path.join(PDF_DIR, f"{doc_type}_{unique_id}.pdf") if doc_type else os.path.join(PDF_DIR, f"{unique_id}.pdf")
+            print_options = PrintOptions()
+            print_options.page_width = 21
+            print_options.page_height = 29
+            pdf = self.driver.print_page(print_options=print_options)
+            pdf_bytes = base64.b64decode(pdf)
+            
+            with open(pdf_path, "wb") as fh:
+                fh.write(pdf_bytes)
+            logger.info(f"HTML content saved as PDF to: {pdf_path}")
+            return pdf_path
+        except Exception as e:
+            logger.exception(e)
+            return None
+        
+
+    def get_all_file_merged(self, all_pdf_paths, doc_type):
+        '''
+            This method will merge the two pdf's or multiple into ones.
+            Returns the single pdf file path that is being merged and stored.
+        '''
+        try:
+            # Ensure the PDF directory exists
+            if not os.path.exists(PDF_DIR):
+                os.makedirs(PDF_DIR)
+                logger.info(logging.INFO, "Creating OS DIR path")
+            
+            unique_id = generate_unique_id()
+            # Generate the path for the final merged PDF
+            pdf_path = os.path.join(
+                PDF_DIR, 
+                f"{doc_type}_{unique_id}.pdf" if doc_type else f"{unique_id}.pdf"
+            )
+            logger.info(logging.INFO, f"New PDF path created: {pdf_path}")
+
+            # Use PdfMerger to merge all PDFs
+            merger = PdfMerger()
+            for pdf_path_item in all_pdf_paths:
+                if os.path.exists(pdf_path_item):
+                    merger.append(pdf_path_item)
+                else:
+                    logger.log(logging.log, f"File not found: {pdf_path_item}")
+            
+            # Write the merged PDF to the final path
+            merger.write(pdf_path)
+            merger.close()
+            
+            logger.log(logging.INFO, f"PDFs merged successfully into: {pdf_path}")
+            return pdf_path
+
+        except Exception as e:
+            logger.error(logging.ERROR, f"Encountring the exception while merging the PDF's into ONE as: {e}")
+            return None
+
+
+    def is_tax_page(self):
+        '''
+            This will check the page, which is loaded is tax page or not
+            Input:
+                Driver Class object
+            Output: 
+                Will Return if it is 
+        '''
+        # Getting the raw text, to check for tax page
+        page_raw_text = self.driver.find_element(By.TAG_NAME, "body").text
+        page_raw_text.strip()
+
+        if "Tax Account Number not found" in page_raw_text:
+            logger.error(logging.ERROR, "Page is not loaded properly")
+            return False
+
+        # Check for TAX page
+        found_tax_keywords = False
+        for keyword in TAX_KEYWORDS:
+            if keyword in page_raw_text:
+                found_tax_keywords = True
+                return True
+
+        # If no TAX keywords are there than reload the website
+        if not found_tax_keywords:
+            logger.error(logging.ERROR, "Not getting any TAX related keywords on the page, reloading...!!!")
+            return False
+
+
+    def process_tax_page(self, config, tax_url):
+        '''
+            Helps in getting identification for the TAX page and to download the correct TAX page according to the STATE and COUNTY
+            Parameters:
+                driver object, state, county, taxAccountNumber
+            Returns:
+                Nothing, last call for the download function to take screenshot or download the webpage.
+        '''
+        counter = 3
+        while counter:
+            counter -= 1
+
+            self.navigate_to_website_tax(tax_url)  
+            if not self.is_tax_page():
+                continue
+
+            keyword_actions = {
+                "group1": ["denton", "johnson", "wise"],
+                "group2": ["hidalgo"]
+            }
+
+            for group, keywords in keyword_actions.items():
+                if any(keyword in tax_url for keyword in keywords):
+                    if group == "group1":
+                        try: 
+                            ### Opening ALL_YEARS page
+                            all_year_event = self.driver.find_element(By.XPATH, config["xpaths"]["all_year"])
+                            all_year_event.click()
+
+                            ### Opening the pop-up window to take the screenshot of the page.                    
+                            element = self.driver.find_element(By.XPATH, config["xpaths"]["payment_history"])
+                            element.click()
+                            time.sleep(3)
+
+                            all_pdf_paths = []
+                            all_pdf_paths.append(self.tax_download_or_screenshot("tax"))
+                            logger.info(logging.INFO, f"Detailed taxation report: {all_pdf_paths[0]}")
+
+                            ### Closing the pop-up window to get the view_more button
+                            self.driver.refresh()
+
+                            ### Opening the webpage completely
+                            while True:
+                                view_more_button = self.driver.find_element(By.XPATH, config["xpaths"]["view_more"])
+                                if view_more_button.text == "Minimize":
+                                    break
+                                view_more_button.click()
+                                time.sleep(2)  
+
+                            ### Opening the first toggle having amount
+                            current_year = datetime.now().year
+                            element = self.driver.find_element(
+                                By.XPATH, 
+                                config["xpaths"]["toggle_down"].format(current_year)
+                            )
+                            element.click()
+                            time.sleep(3)
+                            logger.info(logging.INFO, f"Clicked on year {current_year}")
+
+                            ### Downloading the current page after expanding all the year analysis
+                            all_pdf_paths.append(self.tax_download_or_screenshot("tax"))
+                            logger.info(logging.INFO, f"All year tax details: {all_pdf_paths[-1]}")
+
+                            ### Will pick the file from the list with path of all files and merge them all
+                            return self.get_all_file_merged(all_pdf_paths[::-1], "TAX")
+                        
+                        except (NoSuchElementException, ElementNotInteractableException):
+                            logger.error(logging.ERROR, "No more 'View More' buttons to click.")
+                            return None
+                        
+                        except Exception as e:
+                            logger.error(logging.ERROR, f"An error is encountered as: {e}")
+                            return None
+                        
+                    elif group == "group2":
+                        try: 
+                            self.download_or_screenshot()
+                            element = self.driver.find_element(By.XPATH, config["xpaths"]["taxes_due_detail"])
+                            element.click()
+                        
+                            # Refresh the current page
+                            self.driver.refresh()
+                            time.sleep(5)
+                            WebDriverWait(self.driver, 10).until(
+                                EC.presence_of_element_located((By.TAG_NAME, "html"))
+                            )
+                            return self.tax_download_or_screenshot("TAX")
+                        
+                        except Exception as e:
+                            logger.error(logging.ERROR, f"Encountring the error with: {e}")
+
+            return None 
+
 
     def close(self):
         """
