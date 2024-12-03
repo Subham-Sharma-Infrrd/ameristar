@@ -5,8 +5,6 @@ import re
 import time
 
 from selenium import webdriver
-from webdriver_manager.chrome import ChromeDriverManager
-
 from config.driver_config import HEADLESS
 from log import logger
 from model.mapping import WebScrappingWebPageTypes
@@ -16,11 +14,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium_stealth import stealth
 from selenium.webdriver.chrome.service import Service
-
-
-
+from selenium_stealth import stealth
+from webdriver_manager.chrome import ChromeDriverManager
 
 def detect_cad_homepage_page(driver, validation_params):
     """
@@ -223,54 +219,34 @@ def simulate_human_like_behavior_to_solve_captcha(driver, recaptcha_iframe_xpath
         driver.switch_to.default_content()
         return False
 
+
+
 def get_unique_id_for_tax_doc(driver, config, timeout=10) -> bool:
     """
     This function is to pick account_id from cad to tax document
     """
     # TODO: Need to check if the unique_id_for_tax is present in the tax document
-
     try:
-        # Wait for the `Property ID` element and extract its sibling `td` text
+        # Getting the text of the element from the xpath
         property_id_td = WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.XPATH, config['custom_xpaths']['ACCOUNT_NUMBER_PATH']))
+            EC.presence_of_element_located((By.XPATH, config["custom_xpaths"]["account_number_path"]))
         )
-        account_number = property_id_td.text
-        match = re.search(r"Geographic\s*ID:\s*([A-Z\d.\-]+)", account_number)
-        if match:
-            geographic_id = match.group(1)  # Extract the matched group
-            return geographic_id
-        logger.info(f"Account Number: {account_number}")
-        return account_number
+        text_linked = property_id_td.text
+        if not text_linked:
+            return None
+        
+        regex_patterns = config["account_number_patterns"]
+        for pattern in regex_patterns:
+            match = re.search(pattern, text_linked)
+            if match:
+                account_id = match.group(1)
+                break
+        
+        logger.info(f"Account Number: {account_id}")
+        return account_id
 
     except Exception as e:
-        logger.info(f"An error occurred while extracting the account number: {e}")
-        return None
-
-
-def get_element_value(driver, element_xpath, attribute=None):
-    """
-    Fetches the text or a specific attribute value of an element from a web page.
-    
-    Args:
-        driver (WebDriver): The Selenium WebDriver instance.
-        element_xpath (str): The XPath of the target element.
-        attribute (str, optional): The attribute whose value needs to be fetched. Defaults to None (fetches text content).
-    
-    Returns:
-        str: The value of the element's text or attribute, or None if the element is not found.
-    """
-    try:
-        # Wait for the element to be present and visible
-        element = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, element_xpath))
-        )
-        # Fetch and return the attribute value or the text content
-        if attribute:
-            return element.get_attribute(attribute)
-        else:
-            return element.text
-    except Exception as e:
-        logger.info(f"Error fetching value for element with XPath '{element_xpath}': {e}")
+        logger.info(f"Error fetching value for element with XPath': {e}")
         return None
 
 
@@ -389,10 +365,8 @@ def update_account_number_format(state: str, county: str, text: str)-> str:
             return text.replace(".", "-")
         elif county.upper() in ["HIDALGO"]:
             return text.replace("-", "")
-        # elif county in ["JOHNSON"]:
-        #     return text.replace("-", "")
-        # elif county in ["WISE"]:
-        #     return text.replace("-", "") 
+        else:
+            return text
     return text
 
 def reveal_complete_document(driver):

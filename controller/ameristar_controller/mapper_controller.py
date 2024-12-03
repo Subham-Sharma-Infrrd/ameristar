@@ -6,10 +6,13 @@ import usaddress
 from model.mapping import MappingRequest, MappingResponse, WebScrappingDocType
 from model import get_schema
 from log import logger
-from utils.web_scrapping_utils import get_url_for_tax_docs, update_account_number_format, update_tax_url_with_tax_number
 from service.web_scrapping.web_scrapper import WebScraper
-from utils.common_utils import generate_unique_id, name_and_address_parser
-
+from utils.common_utils import generate_unique_id
+from utils.web_scrapping_utils import (
+    get_url_for_tax_docs, 
+    update_account_number_format,
+    update_tax_url_with_tax_number
+)
 
 api = Namespace("ameristarwrapper")
 
@@ -42,7 +45,8 @@ class MapResource(Resource):
                 })
             
             cad_web_page_config = scraper.get_cad_configs(mapping_request.state, mapping_request.county)
-            account_number_status = scraper.perform_search(cad_web_page_config, mapping_request.street_number, mapping_request.street_address, mapping_request.owner_name)
+            account_number_status = scraper.cad_perform_search(cad_web_page_config, mapping_request.street_number, mapping_request.street_address, mapping_request.owner_name)
+            account_number_status = 1000021
             if account_number_status:
                 # TODO: Add logic to download the Tax document and CAD document
                 # downloading CAD document
@@ -52,13 +56,13 @@ class MapResource(Resource):
                 base_url = get_url_for_tax_docs(mapping_request.state, mapping_request.county, tax_web_page_config)
                 updated_account_number_format = update_account_number_format(mapping_request.state, mapping_request.county, account_number_status)
                 complete_tax_url = update_tax_url_with_tax_number(base_url, updated_account_number_format)
+                ### Calling TAX function to check for TAX related keywords and have a print for it.
+                tax_pdf_path = scraper.process_tax_page(tax_web_page_config, complete_tax_url)
                 # scraper.tax_page_expand_web_page(tax_web_page_config, link_to_page = complete_tax_url)
-                tax_pdf_path = scraper.download_or_screenshot(tax_web_page_config["xpaths"], link_to_page = complete_tax_url, doc_type=WebScrappingDocType.TAX.value)
-                # tax_pdf_path = scraper.download_or_screenshot(tax_web_page_config["xpaths"], doc_type=WebScrappingDocType.TAX.value)
-
+                
                 logger.info("SUCCESSFULLY_SCRAPPED")
                 response = MappingResponse(
-                    cad=cad_pdf_path,
+                    cad="abc",
                     tax=tax_pdf_path,
                     job_id=mapping_request.job_id,
                     order_id=mapping_request.order_id,

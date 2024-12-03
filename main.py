@@ -37,7 +37,7 @@ if __name__ == "__main__":
         
         # Workflow
         web_page_config = scraper.navigate_to_website(state, county)
-        status = scraper.perform_search(web_page_config, street_number, street_name, owner_name)
+        status = scraper.cad_perform_search(web_page_config, street_number, street_name, owner_name)
         if status:
             scraper.download_or_screenshot(web_page_config["xpaths"])
             print("SUCCESSFULLY_SCRAPPED")
